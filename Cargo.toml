@@ -1,0 +1,35 @@
+[package]
+name = "rplayer"
+version = "0.1.0"
+authors = ["Bruce McIntosh <bruce.e.mcintosh@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[dependencies]
+eframe = "0.11.0" # Gives us egui, epi and web+native backends
+
+serde = { version = "1", features = ["derive"], optional = true }
+
+byte-slice-cast = "1.0.0"
+derive_more = "0.99.13"
+anyhow = "1.0.40"
+gst = { package = "gstreamer", version = "0.16.7" }
+gst_app = { package = "gstreamer-app", version = "0.16.5" }
+
+[features]
+default = []
+http = ["eframe/http"] # Enable if you want to do http requests
+persistence = ["eframe/persistence", "serde"] # Enable if you want to persist app state on shutdown
+
+[profile.release]
+opt-level = 2 # fast and small wasm
+
+[patch.crates-io]
+
+# If you want to use the bleeding edge version of `egui`:
+# eframe = { git = "https://github.com/emilk/egui", branch = "master" }
+
+# If you fork https://github.com/emilk/egui you can test with:
+# eframe = { path = "../egui/eframe" }
