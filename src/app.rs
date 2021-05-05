@@ -1,11 +1,9 @@
 use eframe::{egui, epi};
 use egui::{containers::*, *};
-use std::thread;
 use std::sync::mpsc;
 mod pipeline;
-use gst::ElementExtManual;
-use std::time::Duration;
 use std::collections::VecDeque;
+use std::time::Duration;
 
 static RMS_SIZE: usize = 250;
 
@@ -13,24 +11,25 @@ static RMS_SIZE: usize = 250;
 #[cfg_attr(feature = "persistence", derive(serde::Deserialize, serde::Serialize))]
 pub struct PlayerApp {
     file_name: String,
-    gstreamer_pipeline: Option<gst::Pipeline>,
-    sender : mpsc::SyncSender<f64>,
-    receiver : std::sync::mpsc::Receiver<f64>,
+    status_message: String,
+    pipeline: Option<pipeline::Pipeline>,
+    sender: mpsc::SyncSender<f64>,
+    receiver: std::sync::mpsc::Receiver<f64>,
     rms: VecDeque<f64>,
 }
 
 impl Default for PlayerApp {
     fn default() -> Self {
-
         let (sender, receiver) = mpsc::sync_channel(220);
-        let mut rms : VecDeque<f64> = VecDeque::with_capacity(RMS_SIZE);
+        let mut rms: VecDeque<f64> = VecDeque::with_capacity(RMS_SIZE);
         for _ in 0..RMS_SIZE {
             rms.push_back(0.0);
         }
 
         Self {
             file_name: r##"resources/youve_got_speed.mp3"##.to_owned(),
-            gstreamer_pipeline: Option::None,
+            status_message: "".to_owned(),
+            pipeline: Option::None,
             sender,
             receiver,
             rms,
@@ -40,7 +39,7 @@ impl Default for PlayerApp {
 
 impl epi::App for PlayerApp {
     fn name(&self) -> &str {
-        "gplayer"
+        "rplayer"
     }
 
     /// Called by the framework to load old app state (if any).
@@ -60,84 +59,77 @@ impl epi::App for PlayerApp {
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
         let PlayerApp {
             file_name,
-            gstreamer_pipeline,
+            status_message,
+            pipeline,
             sender,
             receiver,
             rms,
         } = self;
 
-        match receiver.recv_timeout(Duration::from_millis(10)) {
-            Ok(r) => {
-//                println!("{:?} rms = {}", std::thread::current().id(),r);
-                rms.push_back(r);
-                if rms.len() > RMS_SIZE {
-                    rms.pop_front();
-                }
-            },
-            _ => (),
+        if let Ok(r) = receiver.recv_timeout(Duration::from_millis(10)) {
+            rms.push_back(r);
+            if rms.len() > RMS_SIZE {
+                rms.pop_front();
+            }
+            *status_message = "".to_string();
         }
+
         egui::TopPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // Play / Pause Button
+                let btn_txt = pipeline
+                    .as_ref()
+                    .filter(|p| p.get_current_state() == gst::State::Playing)
+                    .map_or("\u{25B6}", |_| "\u{23f8}");
 
-                let btn = match gstreamer_pipeline {
-                    Some(p) => {
-                        if p.get_current_state() != gst::State::Playing {
-                            "\u{25B6}"
-                        } else {
-                            "\u{23f8}"
-                        }
-                    }
-                    _ => { "\u{25B6}" }
-                };
-
-                if ui.button(btn).clicked() {
-                    match gstreamer_pipeline {
-                        Some(p) => {
-                            if p.get_current_state() == gst::State::Paused {
-                                p.set_state(gst::State::Playing).unwrap();
-                                println!("{:?} Pipeline playing", thread::current().id());
-                            }
-                            else {
-                                p.set_state(gst::State::Paused).unwrap();
-                                println!("{:?} Pipeline paused", thread::current().id());
-                            }
-                        }
-                        _ => {
-                            *gstreamer_pipeline = match pipeline::create(file_name, sender.clone()) {
-                                Ok(p) => {
-                                    match p.set_state(gst::State::Playing) {
-                                        Ok(_) => {
-                                            println!("{:?} Pipeline playing {}", thread::current().id(), file_name);
-                                            Option::Some(p)
-                                        }
-                                        _ => {
-                                            println!("Error: could not play");
-                                            Option::None
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    println!("Error: {}", e);
-                                    Option::None
-                                }
-                            }
-                        }
+                if ui.button(btn_txt).clicked() {
+                    if let Some(p) = pipeline {
+                        p.play_pause()
+                            .map_err(|err| {
+                                *status_message = format!("Error: {}", err);
+                                *pipeline = Option::None;
+                            })
+                            .ok();
+                    } else {
+                        pipeline::Pipeline::new(file_name, sender.clone())
+                            .map_err(|err| {
+                                *status_message =
+                                    format!("Error: could not create pipeline. {}", err);
+                                *pipeline = Option::None;
+                            })
+                            .and_then(|p| {
+                                p.play()
+                                    .map_err(|err| {
+                                        *status_message = format!("Error: could not play. {}", err);
+                                        *pipeline = Option::None;
+                                    })
+                                    .and_then(|_| {
+                                        *pipeline = Option::Some(p);
+                                        Ok(())
+                                    })
+                            })
+                            .ok();
                     }
                 }
+
+                // Stop button
                 if ui.button("\u{23F9}").clicked() {
-                    match gstreamer_pipeline {
-                        Some(p) => {
-                            p.set_state(gst::State::Null).unwrap();
-                            println!("{:?} Pipeline stopped", thread::current().id());
-                        }
-                        _ => (),
+                    if let Some(p) = pipeline {
+                        p.stop()
+                            .map_err(|err| {
+                                *status_message = format!("Error: could not stop. {}", err);
+                            })
+                            .ok();
                     }
-                    *gstreamer_pipeline = Option::None;
+                    *pipeline = Option::None;
                 }
             });
+
             ui.horizontal(|ui| {
                 ui.label("File: ");
                 ui.text_edit_singleline(file_name);
+                ui.visuals_mut().override_text_color = Some(egui::Color32::RED);
+                ui.label(status_message.clone());
             });
         });
 
@@ -148,30 +140,35 @@ impl epi::App for PlayerApp {
             let desired_size = ui.available_width() * vec2(1.0, 0.35);
             let (_id, rect) = ui.allocate_space(desired_size);
 
-            let to_screen =
-                emath::RectTransform::from_to(Rect::from_x_y_ranges(0.0..=RMS_SIZE as f32, 0.52..=0.55), rect);
+            let to_screen = emath::RectTransform::from_to(
+                Rect::from_x_y_ranges(0.0..=RMS_SIZE as f32, 0.52..=0.55),
+                rect,
+            );
 
             let mut shapes = vec![];
-
-            let points : Vec<Pos2> = (0..RMS_SIZE)
-                .filter(|i| {
-                    rms[*i] > 0.0
-                })
-                .map(|i| {
-                    to_screen * pos2(i as f32, rms[i] as f32)
-                }).collect();
-
             let thickness = 4.0;
+
+            // let points: Vec<Pos2> = (0..RMS_SIZE)
+            //     .filter(|i| rms[*i] > 0.0)
+            //     .map(|i| to_screen * pos2(i as f32, rms[i] as f32))
+            //     .collect();
+            // shapes.push(epaint::Shape::line(
+            //     points,
+            //     Stroke::new(thickness, Color32::from_additive_luminance(196)),
+            // ));
+
             shapes.push(epaint::Shape::line(
-                points,
+                rms.iter()
+                    .enumerate()
+                    .filter(|(_, p)| **p > 0.0)
+                    .map(|(i, p)| to_screen * pos2(i as f32, *p as f32))
+                    .collect::<Vec<_>>(),
                 Stroke::new(thickness, Color32::from_additive_luminance(196)),
             ));
+
             ui.painter().extend(shapes);
         });
 
         ctx.request_repaint();
-
     }
 }
-
-

@@ -7,6 +7,7 @@ mod app;
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    gst::init().unwrap();
     let app = app::PlayerApp::default();
     eframe::run_native(Box::new(app));
 }
