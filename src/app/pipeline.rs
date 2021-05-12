@@ -3,7 +3,10 @@ use byte_slice_cast::*;
 use derive_more::{Display, Error};
 use gst::prelude::*;
 use gst::ElementExt;
+use rustfft::{num_complex::Complex, FftPlanner};
 use std::sync::mpsc;
+
+pub static FFT_SIZE: usize = 4608 / 4;
 
 #[derive(Debug, Display, Error)]
 #[display(fmt = "Missing element {}", _0)]
@@ -16,8 +19,19 @@ pub struct Pipeline {
 impl Pipeline {
     pub fn new(
         file_name: &std::string::String,
-        sender: mpsc::SyncSender<f64>,
+        sender: mpsc::SyncSender<Vec<f64>>,
     ) -> Result<Pipeline, Error> {
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+        let mut fft_buffer = vec![
+            Complex {
+                re: 0.0f32,
+                im: 0.0f32
+            };
+            FFT_SIZE
+        ];
+        let mut pos: usize = 0;
+
         let pipeline = Pipeline {
             gstreamer_pipeline: gst::Pipeline::new(Option::None),
         };
@@ -50,7 +64,19 @@ impl Pipeline {
             .map_err(|_| MissingElement("app_sink"))?;
 
         filesrc.set_property("location", &file_name)?;
-        println!("Set uri to {}", file_name);
+
+        // Appsink andle S16 mono at a convenient sample rate.
+        let caps = gst::Caps::new_simple(
+            "audio/x-raw",
+            &[
+                ("format", &gst_audio::AUDIO_FORMAT_S16.to_str()),
+                ("rate", &11025i32),
+                ("channels", &1i32),
+                ("layout", &"non-interleaved"),
+            ],
+        );
+
+        app_sink.set_property("caps", &caps)?;
 
         let elements = &[
             &filesrc,
@@ -88,7 +114,7 @@ impl Pipeline {
             .expect("Sink element is expected to be an appsink!");
 
         // Getting data out of the appsink is done by setting callbacks on it.
-        // The appsink will then call those handlers, as soon as data is available.
+        // The appsink calls those handlers, as soon as data is available.
         appsink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 // Add a handler to the "new-sample" signal.
@@ -138,18 +164,31 @@ impl Pipeline {
                         gst::FlowError::Error
                     })?;
 
-                    // For buffer (= chunk of samples), we calculate the root mean square:
-                    // (https://en.wikipedia.org/wiki/Root_mean_square)
-                    let sum: f64 = samples
-                        .iter()
-                        .map(|sample| {
-                            let f = f64::from(*sample) / f64::from(i16::MAX);
-                            f * f
-                        })
-                        .sum();
-                    let rms = (sum / (samples.len() as f64)).sqrt();
-                    //println!("{:?} rms: {}", thread::current().id(), rms);
-                    sender.send(rms).unwrap();
+                    for sample in samples {
+                        if pos >= FFT_SIZE {
+                            fft.process(&mut fft_buffer);
+                            pos = 0;
+                            sender
+                                .send(
+                                    fft_buffer
+                                        .iter()
+                                        .skip(FFT_SIZE / 2)
+                                        .map(|v| {
+                                            let x =
+                                                ((v.norm() as f64) / FFT_SIZE as f64).log10() * 2.0;
+                                            if x < 0.0 {
+                                                0.0
+                                            } else {
+                                                x * 10.0
+                                            }
+                                        })
+                                        .collect::<Vec<_>>(),
+                                )
+                                .unwrap();
+                        }
+                        fft_buffer[pos] = Complex::new(*sample as f32, 0.0 as f32);
+                        pos += 1;
+                    }
 
                     Ok(gst::FlowSuccess::Ok)
                 })
@@ -171,8 +210,7 @@ impl Pipeline {
     pub fn play_pause(&self) -> Result<(), Error> {
         if self.gstreamer_pipeline.get_current_state() == gst::State::Paused {
             self.gstreamer_pipeline.set_state(gst::State::Playing)?;
-        }
-        else {
+        } else {
             self.gstreamer_pipeline.set_state(gst::State::Paused)?;
         }
         Ok(())

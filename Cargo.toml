@@ -16,7 +16,11 @@ byte-slice-cast = "1.0.0"
 derive_more = "0.99.13"
 anyhow = "1.0.40"
 gst = { package = "gstreamer", version = "0.16.7" }
+gst_audio = { package = "gstreamer-audio", version = "0.16.7" }
 gst_app = { package = "gstreamer-app", version = "0.16.5" }
+ord_subset = "3"
+
+rustfft = "6.0.0"
 
 [features]
 default = []
