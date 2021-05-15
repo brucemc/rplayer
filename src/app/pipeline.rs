@@ -6,7 +6,7 @@ use gst::ElementExt;
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::sync::mpsc;
 
-pub static FFT_SIZE: usize = 4608 / 4;
+pub static FFT_SIZE: usize = 800;
 
 #[derive(Debug, Display, Error)]
 #[display(fmt = "Missing element {}", _0)]
