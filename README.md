@@ -14,4 +14,4 @@ crate which is written in pure rust and is a pleasure to use.
 
 ![Screen Shot](./resources/images/screen.png) 
 
-The provided MP3 file is available on Souncloud at [notchism](https://soundcloud.com/notchism)
+The provided MP3 file is available on Soundcloud at [notchism](https://soundcloud.com/notchism)
